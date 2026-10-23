@@ -30,14 +30,33 @@ function drawCameraPreview(results) {
   // Clear
   previewCtx.clearRect(0, 0, pw, ph);
 
+  // Calculate aspect-ratio-preserving draw dimensions
+  const videoAspect = video.videoWidth / video.videoHeight;
+  const containerAspect = pw / ph;
+  let drawW, drawH, drawX, drawY;
+
+  if (videoAspect > containerAspect) {
+    // Video is wider than container — fit to width, letterbox top/bottom
+    drawW = pw;
+    drawH = pw / videoAspect;
+    drawX = 0;
+    drawY = (ph - drawH) / 2;
+  } else {
+    // Video is taller than container — fit to height, letterbox left/right
+    drawH = ph;
+    drawW = ph * videoAspect;
+    drawY = 0;
+    drawX = (pw - drawW) / 2;
+  }
+
   // Draw video frame (mirrored if front camera)
   if (isMirrored) {
-    previewCtx.translate(pw, 0);
+    previewCtx.translate(drawX + drawW, drawY);
     previewCtx.scale(-1, 1);
-    previewCtx.drawImage(video, 0, 0, pw, ph);
+    previewCtx.drawImage(video, 0, 0, drawW, drawH);
     previewCtx.setTransform(1, 0, 0, 1, 0, 0);
   } else {
-    previewCtx.drawImage(video, 0, 0, pw, ph);
+    previewCtx.drawImage(video, drawX, drawY, drawW, drawH);
   }
 
   // Draw landmarks if hand detected
@@ -76,9 +95,29 @@ const HAND_CONNECTIONS = [
 function drawLandmarksOnPreview(landmarks, pw, ph, indexUp) {
   previewCtx.save();
 
-  // Mirror x-coordinates for preview if front camera
-  const getX = (lm) => isMirrored ? (1 - lm.x) * pw : lm.x * pw;
-  const getY = (lm) => lm.y * ph;
+  // Calculate same aspect-ratio-preserving dimensions as video draw
+  const videoAspect = video.videoWidth / video.videoHeight;
+  const containerAspect = pw / ph;
+  let drawW, drawH, drawX, drawY;
+
+  if (videoAspect > containerAspect) {
+    drawW = pw;
+    drawH = pw / videoAspect;
+    drawX = 0;
+    drawY = (ph - drawH) / 2;
+  } else {
+    drawH = ph;
+    drawW = ph * videoAspect;
+    drawY = 0;
+    drawX = (pw - drawW) / 2;
+  }
+
+  // Map normalized landmarks to the letterboxed video area
+  const getX = (lm) => {
+    const x = isMirrored ? (1 - lm.x) : lm.x;
+    return drawX + x * drawW;
+  };
+  const getY = (lm) => drawY + lm.y * drawH;
 
   // Draw skeleton connections
   previewCtx.strokeStyle = 'rgba(0, 255, 150, 0.7)';
@@ -240,14 +279,15 @@ window.addEventListener('orientationchange', () => {
 });
 
 // ------------------------------------------------------------------
-// Orientation check — show landscape hint in portrait on mobile
+// Orientation check — show landscape hint only when genuinely in portrait
 // ------------------------------------------------------------------
 function checkOrientation() {
   if (!isMobile) {
     landscapeHint.classList.add('hidden');
     return;
   }
-  const isPortrait = window.matchMedia('(orientation: portrait)').matches;
+  // Use window dimensions rather than orientation API for reliability
+  const isPortrait = window.innerHeight > window.innerWidth;
   if (isPortrait && cameraStarted) {
     landscapeHint.classList.remove('hidden');
   } else {
@@ -369,20 +409,11 @@ async function startCamera() {
   const constraints = {
     video: {
       facingMode: { ideal: currentFacingMode },
-      width: { ideal: 640 },
-      height: { ideal: 480 }
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
     },
     audio: false
   };
-
-  // Use lower resolution on mobile to reduce thermal throttling
-  if (isMobile) {
-    constraints.video.width = { ideal: 640 };
-    constraints.video.height = { ideal: 480 };
-  } else {
-    constraints.video.width = { ideal: 1280 };
-    constraints.video.height = { ideal: 720 };
-  }
 
   try {
     cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -676,33 +707,6 @@ function resetSmoothing() {
 }
 
 // ------------------------------------------------------------------
-// Pinch detection — dynamic threshold based on hand depth
-// Uses wrist (landmark 0) to middle knuckle (landmark 9) as reference scalar
-// ------------------------------------------------------------------
-function isPinching(landmarks) {
-  const thumb = landmarks[4];
-  const index = landmarks[8];
-  const wrist = landmarks[0];
-  const midKnuckle = landmarks[9];
-
-  // Reference distance = wrist to middle knuckle (hand size proxy)
-  const refDx = wrist.x - midKnuckle.x;
-  const refDy = wrist.y - midKnuckle.y;
-  const refDist = Math.sqrt(refDx * refDx + refDy * refDy);
-
-  // Pinch distance
-  const dx = thumb.x - index.x;
-  const dy = thumb.y - index.y;
-  const pinchDist = Math.sqrt(dx * dx + dy * dy);
-
-  // Dynamic threshold: ~0.65 of the reference distance, clamped
-  // (accounts for hand being closer/farther from camera)
-  const dynamicThreshold = Math.max(0.04, Math.min(0.08, refDist * 0.65));
-
-  return pinchDist < dynamicThreshold;
-}
-
-// ------------------------------------------------------------------
 // Main callback from MediaPipe Hands
 // ------------------------------------------------------------------
 function onResults(results) {
@@ -800,16 +804,6 @@ async function init() {
 
   // Request wake lock to prevent screen sleep
   await requestWakeLock();
-
-  // Try to lock orientation to landscape on mobile (where supported)
-  if (isMobile && screen.orientation && screen.orientation.lock) {
-    try {
-      await screen.orientation.lock('landscape');
-    } catch (e) {
-      // Not supported or denied — show landscape hint instead
-      console.log('Orientation lock not available, will show hint instead');
-    }
-  }
 
   // Run countdown (mobile only) then start camera
   runCountdown(async () => {
