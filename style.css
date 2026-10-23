@@ -1,10 +1,15 @@
 html,
 body {
   margin: 0;
-  width: 100%;
-  height: 100%;
+  width: 100dvw;
+  height: 100dvh;
   background: #1a2921;
   overflow: hidden;
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 video {
@@ -20,7 +25,7 @@ canvas {
   height: 100%;
 }
 
-/* HUD overlay */
+/* ===== HUD overlay ===== */
 #hud {
   position: fixed;
   bottom: 16px;
@@ -44,4 +49,181 @@ canvas {
 #hud .hud-hint {
   font-size: 11px;
   opacity: 0.65;
+}
+
+@media (max-width: 768px) {
+  #hud {
+    font-size: 11px;
+    padding: 8px 12px;
+    bottom: 10px;
+    right: 10px;
+  }
+  #hud .hud-hint {
+    display: none;
+  }
+}
+
+/* ===== Touch toolbar ===== */
+#toolbar {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(20, 20, 20, 0.7);
+  border-radius: 24px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 100;
+  max-width: calc(100dvw - 24px);
+  flex-wrap: nowrap;
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: #fcf9ea;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.toolbar-btn:active,
+.toolbar-btn.active {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+#btn-eraser.active {
+  background: rgba(255, 200, 100, 0.3);
+  color: #ffeb79;
+}
+
+/* Color swatches */
+#color-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.color-swatch.active {
+  border-color: rgba(255, 255, 255, 0.7);
+  transform: scale(1.15);
+}
+
+/* Collapsed floating icon */
+#toolbar-collapsed {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: rgba(20, 20, 20, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #fcf9ea;
+  cursor: pointer;
+  z-index: 100;
+}
+
+/* ===== Countdown overlay ===== */
+#countdown-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100dvw;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(26, 41, 33, 0.92);
+  z-index: 200;
+}
+
+#countdown-number {
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 96px;
+  font-weight: 700;
+  color: #fcf9ea;
+  text-shadow: 0 0 24px rgba(255, 255, 255, 0.3);
+  animation: countdown-pulse 1s ease-in-out infinite;
+}
+
+.countdown-hint {
+  margin-top: 12px;
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 16px;
+  color: rgba(252, 249, 234, 0.5);
+}
+
+@keyframes countdown-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.15); opacity: 0.8; }
+}
+
+/* ===== Landscape hint ===== */
+#landscape-hint {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100dvw;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(26, 41, 33, 0.95);
+  z-index: 150;
+  color: rgba(252, 249, 234, 0.7);
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 14px;
+  text-align: center;
+  padding: 24px;
+}
+
+#landscape-hint svg {
+  color: rgba(252, 249, 234, 0.5);
+  animation: rotate-hint 2s ease-in-out infinite;
+}
+
+@keyframes rotate-hint {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-90deg); }
+}
+
+/* ===== Utility ===== */
+.hidden {
+  display: none !important;
 }

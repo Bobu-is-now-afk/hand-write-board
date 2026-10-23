@@ -5,7 +5,7 @@ const ctx = canvas.getContext('2d');
 // --- Blackboard config ---
 const BLACKBOARD_COLOR = '#1a2921';
 
-// Chalk color palette: index = mode selector (1-based via keyboard)
+// Chalk color palette
 const CHALK_COLORS = [
   { name: 'White',  hex: '#fcf9ea' },
   { name: 'Yellow', hex: '#ffeb79' },
@@ -13,17 +13,17 @@ const CHALK_COLORS = [
   { name: 'Pink',   hex: '#fca1a1' }
 ];
 
-let chalkColorIndex = 0;   // default: White
+let chalkColorIndex = 0;
 let eraserMode = false;
-let penDown = false;         // true when pinch detected or space held
+let penDown = false;
 let spaceHeld = false;
 
 // Pinch detection
-const PINCH_THRESHOLD = 0.055; // normalized distance between thumb tip (4) & index tip (8)
+let PINCH_THRESHOLD = 0.055; // dynamic — recalculated per frame
 let wasPinching = false;
 
 // Stroke storage
-let strokes = [];           // array of { color, width, eraser, points: [{x,y}] }
+let strokes = [];
 let currentStroke = null;
 
 // Smoothing
@@ -32,9 +32,41 @@ let smoothY = null;
 let prevX = null;
 let prevY = null;
 
-// HUD elements
+// --- Camera state ---
+let currentFacingMode = 'user'; // "user" (front) or "environment" (rear)
+let isMirrored = true;          // mirror only when front camera
+let cameraStream = null;
+let cameraStarted = false;
+let isMobile = false;
+
+// --- Wake lock ---
+let wakeLock = null;
+
+// --- DOM elements ---
 const hudMode = document.getElementById('hud-mode');
 const hudStatus = document.getElementById('hud-status');
+const hudCamera = document.getElementById('hud-camera');
+const toolbar = document.getElementById('toolbar');
+const toolbarCollapsed = document.getElementById('toolbar-collapsed');
+const countdownOverlay = document.getElementById('countdown-overlay');
+const countdownNumber = document.getElementById('countdown-number');
+const landscapeHint = document.getElementById('landscape-hint');
+const btnCollapse = document.getElementById('btn-collapse');
+const btnEraser = document.getElementById('btn-eraser');
+const btnUndo = document.getElementById('btn-undo');
+const btnClear = document.getElementById('btn-clear');
+const btnCamera = document.getElementById('btn-camera');
+const btnFullscreen = document.getElementById('btn-fullscreen');
+const colorSwatches = document.querySelectorAll('.color-swatch');
+
+// ------------------------------------------------------------------
+// Mobile detection
+// ------------------------------------------------------------------
+function detectMobile() {
+  return /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(navigator.userAgent) ||
+         (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
+}
+isMobile = detectMobile();
 
 // ------------------------------------------------------------------
 // Canvas resize — preserves stroke positions proportionally
@@ -43,8 +75,12 @@ function resizeCanvas() {
   const oldWidth = canvas.width || window.innerWidth;
   const oldHeight = canvas.height || window.innerHeight;
 
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  // Use visualViewport for accurate mobile dimensions (accounts for address bar)
+  const w = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+  const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+
+  canvas.width = w;
+  canvas.height = h;
 
   const scaleX = canvas.width / oldWidth;
   const scaleY = canvas.height / oldHeight;
@@ -63,7 +99,55 @@ function resizeCanvas() {
 }
 
 resizeCanvas();
+
+// Use visualViewport resize for mobile address bar changes
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', resizeCanvas);
+}
 window.addEventListener('resize', resizeCanvas);
+window.addEventListener('orientationchange', () => {
+  setTimeout(resizeCanvas, 200);
+  checkOrientation();
+});
+
+// ------------------------------------------------------------------
+// Orientation check — show landscape hint in portrait on mobile
+// ------------------------------------------------------------------
+function checkOrientation() {
+  if (!isMobile) {
+    landscapeHint.classList.add('hidden');
+    return;
+  }
+  const isPortrait = window.matchMedia('(orientation: portrait)').matches;
+  if (isPortrait && cameraStarted) {
+    landscapeHint.classList.remove('hidden');
+  } else {
+    landscapeHint.classList.add('hidden');
+  }
+}
+
+// ------------------------------------------------------------------
+// Screen Wake Lock — prevents auto-lock during drawing sessions
+// ------------------------------------------------------------------
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      // Re-acquire on visibility change (e.g. tab switch)
+      document.addEventListener('visibilitychange', async () => {
+        if (wakeLock !== null && document.visibilityState === 'visible') {
+          try {
+            wakeLock = await navigator.wakeLock.request('screen');
+          } catch (err) {
+            console.warn('Wake lock re-acquire failed:', err);
+          }
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('Wake lock failed:', err);
+  }
+}
 
 // ------------------------------------------------------------------
 // Fullscreen toggle
@@ -91,50 +175,254 @@ function clearBlackboard() {
 }
 
 // ------------------------------------------------------------------
-// Keyboard controls
+// Undo — remove last stroke
+// ------------------------------------------------------------------
+function undoStroke() {
+  if (strokes.length > 0) {
+    strokes.pop();
+    currentStroke = null;
+    penDown = false;
+    prevX = null;
+    prevY = null;
+  }
+}
+
+// ------------------------------------------------------------------
+// Set chalk color
+// ------------------------------------------------------------------
+function setChalkColor(index) {
+  chalkColorIndex = index;
+  eraserMode = false;
+  // Update UI
+  colorSwatches.forEach((sw, i) => {
+    sw.classList.toggle('active', i === index);
+  });
+  btnEraser.classList.remove('active');
+  updateHUD();
+}
+
+// ------------------------------------------------------------------
+// Toggle eraser
+// ------------------------------------------------------------------
+function toggleEraser() {
+  eraserMode = !eraserMode;
+  btnEraser.classList.toggle('active', eraserMode);
+  updateHUD();
+}
+
+// ------------------------------------------------------------------
+// Camera switching — front <-> rear with track cleanup
+// ------------------------------------------------------------------
+async function switchCamera() {
+  currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+  isMirrored = (currentFacingMode === 'user');
+  hudCamera.textContent = `Cam: ${currentFacingMode === 'user' ? 'Front' : 'Rear'}`;
+
+  // Update video mirror CSS
+  video.style.transform = isMirrored ? 'scaleX(-1)' : 'scaleX(1)';
+
+  // Stop existing camera
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+  }
+  if (typeof camera !== 'undefined' && camera) {
+    try { camera.stop(); } catch (e) {}
+  }
+
+  await startCamera();
+}
+
+// ------------------------------------------------------------------
+// Start camera stream with facingMode constraint
+// ------------------------------------------------------------------
+async function startCamera() {
+  const constraints = {
+    video: {
+      facingMode: { ideal: currentFacingMode },
+      width: { ideal: 640 },
+      height: { ideal: 480 }
+    },
+    audio: false
+  };
+
+  // Use lower resolution on mobile to reduce thermal throttling
+  if (isMobile) {
+    constraints.video.width = { ideal: 640 };
+    constraints.video.height = { ideal: 480 };
+  } else {
+    constraints.video.width = { ideal: 1280 };
+    constraints.video.height = { ideal: 720 };
+  }
+
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = cameraStream;
+
+    // Wait for video to be ready
+    await new Promise(resolve => {
+      if (video.readyState >= 2) resolve();
+      else video.addEventListener('loadeddata', resolve, { once: true });
+    });
+
+    cameraStarted = true;
+    checkOrientation();
+
+    // Start MediaPipe processing loop
+    startProcessingLoop();
+  } catch (err) {
+    console.error('Camera start failed:', err);
+    // Fallback: try without facingMode constraint
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      video.srcObject = cameraStream;
+      await new Promise(resolve => {
+        if (video.readyState >= 2) resolve();
+        else video.addEventListener('loadeddata', resolve, { once: true });
+      });
+      cameraStarted = true;
+      startProcessingLoop();
+    } catch (err2) {
+      console.error('Camera fallback failed:', err2);
+    }
+  }
+}
+
+// ------------------------------------------------------------------
+// Processing loop — sends video frames to MediaPipe Hands
+// Uses requestAnimationFrame for rendering decoupled from processing
+// ------------------------------------------------------------------
+let processingActive = false;
+async function processFrame() {
+  if (!cameraStarted || !video.videoWidth) {
+    requestAnimationFrame(processFrame);
+    return;
+  }
+  try {
+    await hands.send({ image: video });
+  } catch (e) {
+    // Hands not ready yet
+  }
+  requestAnimationFrame(processFrame);
+}
+
+function startProcessingLoop() {
+  if (processingActive) return;
+  processingActive = true;
+  processFrame();
+}
+
+// ------------------------------------------------------------------
+// Countdown before tracking starts (mobile UX — time to position)
+// ------------------------------------------------------------------
+function runCountdown(callback) {
+  if (!isMobile) {
+    callback();
+    return;
+  }
+  let count = 3;
+  countdownOverlay.classList.remove('hidden');
+  countdownNumber.textContent = count;
+
+  const interval = setInterval(() => {
+    count--;
+    if (count > 0) {
+      countdownNumber.textContent = count;
+    } else {
+      clearInterval(interval);
+      countdownOverlay.classList.add('hidden');
+      callback();
+    }
+  }, 1000);
+}
+
+// ------------------------------------------------------------------
+// Keyboard controls (desktop)
 // ------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
 
-  // Color switching
-  if (key === '1') { chalkColorIndex = 0; eraserMode = false; updateHUD(); }
-  if (key === '2') { chalkColorIndex = 1; eraserMode = false; updateHUD(); }
-  if (key === '3') { chalkColorIndex = 2; eraserMode = false; updateHUD(); }
-  if (key === '4') { chalkColorIndex = 3; eraserMode = false; updateHUD(); }
+  if (key === '1') setChalkColor(0);
+  if (key === '2') setChalkColor(1);
+  if (key === '3') setChalkColor(2);
+  if (key === '4') setChalkColor(3);
 
-  // Eraser
-  if (key === 'e') { eraserMode = !eraserMode; updateHUD(); }
+  if (key === 'e') toggleEraser();
 
-  // Clear
   if (key === 'c' || e.key === 'Backspace') {
     e.preventDefault();
     clearBlackboard();
   }
 
-  // Space — fallback pen-down
-  if (e.code === 'Space') {
+  if (key === 'z' && !e.repeat) {
     e.preventDefault();
-    if (!spaceHeld) {
-      spaceHeld = true;
-    }
+    undoStroke();
   }
 
-  // Fullscreen
-  if (key === 'f' && !e.repeat) {
-    toggleFullscreen();
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (!spaceHeld) spaceHeld = true;
   }
+
+  if (key === 'f' && !e.repeat) toggleFullscreen();
 });
 
 window.addEventListener('keyup', (e) => {
-  if (e.code === 'Space') {
-    spaceHeld = false;
-  }
+  if (e.code === 'Space') spaceHeld = false;
 });
 
 window.addEventListener('blur', () => {
   spaceHeld = false;
   wasPinching = false;
 });
+
+// ------------------------------------------------------------------
+// Touch toolbar event listeners
+// ------------------------------------------------------------------
+btnCollapse.addEventListener('click', () => {
+  toolbar.classList.add('hidden');
+  toolbarCollapsed.classList.remove('hidden');
+});
+
+toolbarCollapsed.addEventListener('click', () => {
+  toolbarCollapsed.classList.add('hidden');
+  toolbar.classList.remove('hidden');
+});
+
+colorSwatches.forEach((sw) => {
+  sw.addEventListener('click', () => {
+    const idx = parseInt(sw.dataset.color, 10);
+    setChalkColor(idx);
+  });
+});
+
+btnEraser.addEventListener('click', toggleEraser);
+btnUndo.addEventListener('click', undoStroke);
+btnClear.addEventListener('click', clearBlackboard);
+btnCamera.addEventListener('click', switchCamera);
+btnFullscreen.addEventListener('click', toggleFullscreen);
+
+// Auto-hide toolbar after inactivity (mobile)
+let toolbarHideTimer = null;
+function resetToolbarHideTimer() {
+  if (toolbarHideTimer) clearTimeout(toolbarHideTimer);
+  if (isMobile) {
+    toolbarHideTimer = setTimeout(() => {
+      if (!eraserMode) { // Don't auto-hide if eraser is active
+        toolbar.classList.add('hidden');
+        toolbarCollapsed.classList.remove('hidden');
+      }
+    }, 4000);
+  }
+}
+// Touch anywhere shows toolbar again
+document.addEventListener('touchstart', () => {
+  if (toolbar.classList.contains('hidden')) {
+    toolbar.classList.remove('hidden');
+    toolbarCollapsed.classList.add('hidden');
+  }
+  resetToolbarHideTimer();
+}, { passive: true });
 
 // ------------------------------------------------------------------
 // HUD update
@@ -145,6 +433,7 @@ function updateHUD() {
   } else {
     hudMode.textContent = `Mode: Chalk [${CHALK_COLORS[chalkColorIndex].name}]`;
   }
+  hudCamera.textContent = `Cam: ${currentFacingMode === 'user' ? 'Front' : 'Rear'}`;
   if (penDown) {
     hudStatus.textContent = 'Status: Drawing';
   } else if (smoothX !== null) {
@@ -186,7 +475,6 @@ function drawStrokes() {
     ctx.stroke();
   }
 
-  // Reset composite for other drawing
   ctx.globalCompositeOperation = 'source-over';
 }
 
@@ -200,7 +488,6 @@ function drawCursor() {
   ctx.shadowBlur = 0;
 
   if (penDown) {
-    // Pen is down — glowing filled dot
     ctx.fillStyle = eraserMode ? 'rgba(255,255,255,0.8)' : CHALK_COLORS[chalkColorIndex].hex;
     ctx.shadowColor = eraserMode ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.5)';
     ctx.shadowBlur = 12;
@@ -208,7 +495,6 @@ function drawCursor() {
     ctx.arc(smoothX, smoothY, 7, 0, Math.PI * 2);
     ctx.fill();
   } else {
-    // Hovering — faint ring
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
     ctx.lineWidth = 2;
     ctx.shadowColor = 'rgba(255,255,255,0.3)';
@@ -222,15 +508,30 @@ function drawCursor() {
 }
 
 // ------------------------------------------------------------------
-// Pinch detection — distance between landmark 4 (thumb tip) & 8 (index tip)
+// Pinch detection — dynamic threshold based on hand depth
+// Uses wrist (landmark 0) to middle knuckle (landmark 9) as reference scalar
 // ------------------------------------------------------------------
 function isPinching(landmarks) {
   const thumb = landmarks[4];
   const index = landmarks[8];
+  const wrist = landmarks[0];
+  const midKnuckle = landmarks[9];
+
+  // Reference distance = wrist to middle knuckle (hand size proxy)
+  const refDx = wrist.x - midKnuckle.x;
+  const refDy = wrist.y - midKnuckle.y;
+  const refDist = Math.sqrt(refDx * refDx + refDy * refDy);
+
+  // Pinch distance
   const dx = thumb.x - index.x;
   const dy = thumb.y - index.y;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-  return dist < PINCH_THRESHOLD;
+  const pinchDist = Math.sqrt(dx * dx + dy * dy);
+
+  // Dynamic threshold: ~0.65 of the reference distance, clamped
+  // (accounts for hand being closer/farther from camera)
+  const dynamicThreshold = Math.max(0.04, Math.min(0.08, refDist * 0.65));
+
+  return pinchDist < dynamicThreshold;
 }
 
 // ------------------------------------------------------------------
@@ -259,8 +560,8 @@ function onResults(results) {
   const landmarks = results.multiHandLandmarks[0];
   const tip = landmarks[8]; // index fingertip
 
-  // Mirror coordinate inversion: canvasX = (1 - landmark.x) * canvas.width
-  const x = (1 - tip.x) * canvas.width;
+  // Mirror coordinate inversion — only when using front camera
+  const x = isMirrored ? (1 - tip.x) * canvas.width : tip.x * canvas.width;
   const y = tip.y * canvas.height;
 
   // Smooth the cursor position
@@ -272,7 +573,7 @@ function onResults(results) {
     smoothY += (y - smoothY) * 0.45;
   }
 
-  // Pinch detection
+  // Pinch detection (dynamic threshold)
   const pinching = isPinching(landmarks);
 
   // Pen is down if pinching OR space held
@@ -280,7 +581,6 @@ function onResults(results) {
 
   // State machine
   if (shouldDraw && !penDown) {
-    // Pen just went down — start a new stroke
     penDown = true;
     currentStroke = {
       color: CHALK_COLORS[chalkColorIndex].hex,
@@ -294,23 +594,19 @@ function onResults(results) {
   }
 
   if (shouldDraw && currentStroke) {
-    // Add point to current stroke
     currentStroke.points.push({ x: smoothX, y: smoothY });
     prevX = smoothX;
     prevY = smoothY;
   }
 
   if (!shouldDraw && penDown) {
-    // Pen just went up — stop drawing
     penDown = false;
     currentStroke = null;
     prevX = null;
     prevY = null;
   }
 
-  // Draw cursor indicator
   drawCursor();
-
   updateHUD();
 }
 
@@ -331,14 +627,31 @@ hands.setOptions({
 hands.onResults(onResults);
 
 // ------------------------------------------------------------------
-// Camera feed
+// Initialize — show toolbar, start wake lock, run countdown, start camera
 // ------------------------------------------------------------------
-const camera = new Camera(video, {
-  onFrame: async () => {
-    await hands.send({ image: video });
-  },
-  width: 1280,
-  height: 720
-});
+async function init() {
+  // Show toolbar
+  toolbar.classList.remove('hidden');
 
-camera.start();
+  // Request wake lock to prevent screen sleep
+  await requestWakeLock();
+
+  // Try to lock orientation to landscape on mobile (where supported)
+  if (isMobile && screen.orientation && screen.orientation.lock) {
+    try {
+      await screen.orientation.lock('landscape');
+    } catch (e) {
+      // Not supported or denied — show landscape hint instead
+      console.log('Orientation lock not available, will show hint instead');
+    }
+  }
+
+  // Run countdown (mobile only) then start camera
+  runCountdown(async () => {
+    await startCamera();
+    updateHUD();
+  });
+}
+
+// Start everything
+init();

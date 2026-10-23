@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1a2921">
   <title>Air Blackboard</title>
 
   <link rel="stylesheet" href="style.css">
@@ -15,11 +18,95 @@
   <video id="video" autoplay playsinline></video>
   <canvas id="canvas"></canvas>
 
+  <!-- Countdown overlay (3-second before camera tracking starts) -->
+  <div id="countdown-overlay" class="hidden">
+    <div id="countdown-number">3</div>
+    <div class="countdown-hint">Position your hand…</div>
+  </div>
+
+  <!-- Touch toolbar (mobile & desktop) -->
+  <div id="toolbar" class="hidden">
+    <!-- Collapse / expand toggle -->
+    <button id="btn-collapse" class="toolbar-btn" title="Collapse toolbar">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 18 9 12 15 6"/>
+      </svg>
+    </button>
+
+    <!-- Color picker -->
+    <div id="color-picker" class="toolbar-group">
+      <button class="color-swatch active" data-color="0" style="background:#fcf9ea;" title="White"></button>
+      <button class="color-swatch" data-color="1" style="background:#ffeb79;" title="Yellow"></button>
+      <button class="color-swatch" data-color="2" style="background:#93d4e8;" title="Cyan"></button>
+      <button class="color-swatch" data-color="3" style="background:#fca1a1;" title="Pink"></button>
+    </div>
+
+    <!-- Eraser toggle -->
+    <button id="btn-eraser" class="toolbar-btn" title="Eraser">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 20H8.5L3 14.5a2.83 2.83 0 0 1 0-4l7-7a2.83 2.83 0 0 1 4 0l7 7a2.83 2.83 0 0 1 0 4L13.5 20"/>
+        <line x1="18" y1="12.3" x2="11.7" y2="6"/>
+      </svg>
+    </button>
+
+    <!-- Undo -->
+    <button id="btn-undo" class="toolbar-btn" title="Undo">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="1 4 1 10 7 10"/>
+        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+      </svg>
+    </button>
+
+    <!-- Clear board -->
+    <button id="btn-clear" class="toolbar-btn" title="Clear board">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+      </svg>
+    </button>
+
+    <!-- Camera flip -->
+    <button id="btn-camera" class="toolbar-btn" title="Switch camera">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 4v6h-6"/>
+        <path d="M1 20v-6h6"/>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/>
+        <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>
+      </svg>
+    </button>
+
+    <!-- Fullscreen -->
+    <button id="btn-fullscreen" class="toolbar-btn" title="Fullscreen">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Collapsed floating icon -->
+  <button id="toolbar-collapsed" class="hidden">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="3" y1="12" x2="21" y2="12"/>
+      <line x1="3" y1="6" x2="21" y2="6"/>
+      <line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+  </button>
+
+  <!-- Landscape hint (portrait only) -->
+  <div id="landscape-hint" class="hidden">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
+      <line x1="12" y1="18" x2="12" y2="18.01"/>
+    </svg>
+    <p>Rotate to landscape for more writing space</p>
+  </div>
+
   <!-- HUD overlay -->
   <div id="hud">
     <span id="hud-mode">Mode: Chalk [White]</span>
     <span id="hud-status">Status: Idle</span>
-    <span class="hud-hint">'C' to Clear | 'E' Eraser | '1-4' Colors | 'Space' Draw | 'F' Fullscreen</span>
+    <span id="hud-camera">Cam: Front</span>
+    <span class="hud-hint">'C' Clear | 'E' Eraser | '1-4' Colors | 'Space' Draw | 'F' Fullscreen | 'Z' Undo</span>
   </div>
 
   <script src="script.js"></script>
