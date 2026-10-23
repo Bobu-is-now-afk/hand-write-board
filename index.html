@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Air Pen</title>
+  <title>Air Blackboard</title>
 
   <link rel="stylesheet" href="style.css">
 
@@ -14,6 +14,13 @@
 <body>
   <video id="video" autoplay playsinline></video>
   <canvas id="canvas"></canvas>
+
+  <!-- HUD overlay -->
+  <div id="hud">
+    <span id="hud-mode">Mode: Chalk [White]</span>
+    <span id="hud-status">Status: Idle</span>
+    <span class="hud-hint">'C' to Clear | 'E' Eraser | '1-4' Colors | 'Space' Draw | 'F' Fullscreen</span>
+  </div>
 
   <script src="script.js"></script>
 </body>
