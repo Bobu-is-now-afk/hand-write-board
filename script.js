@@ -2,6 +2,132 @@ const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
+// --- Camera preview overlay ---
+const cameraPreview = document.getElementById('camera-preview');
+const previewCanvas = document.getElementById('preview-canvas');
+const previewCtx = previewCanvas.getContext('2d');
+let previewVisible = false;
+
+// ------------------------------------------------------------------
+// Camera preview rendering — draws video + landmarks on small overlay
+// ------------------------------------------------------------------
+function drawCameraPreview(results) {
+  if (!previewVisible) {
+    cameraPreview.classList.remove('hidden');
+    previewVisible = true;
+  }
+
+  const pw = cameraPreview.clientWidth;
+  const ph = cameraPreview.clientHeight;
+  // Match canvas to container
+  if (previewCanvas.width !== pw || previewCanvas.height !== ph) {
+    previewCanvas.width = pw;
+    previewCanvas.height = ph;
+  }
+
+  previewCtx.save();
+
+  // Clear
+  previewCtx.clearRect(0, 0, pw, ph);
+
+  // Draw video frame (mirrored if front camera)
+  if (isMirrored) {
+    previewCtx.translate(pw, 0);
+    previewCtx.scale(-1, 1);
+    previewCtx.drawImage(video, 0, 0, pw, ph);
+    previewCtx.setTransform(1, 0, 0, 1, 0, 0);
+  } else {
+    previewCtx.drawImage(video, 0, 0, pw, ph);
+  }
+
+  // Draw landmarks if hand detected
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    const landmarks = results.multiHandLandmarks[0];
+    drawLandmarksOnPreview(landmarks, pw, ph);
+
+    // Visual status indicator — green border when hand detected
+    cameraPreview.style.borderColor = 'rgba(100, 255, 100, 0.6)';
+    cameraPreview.style.boxShadow = '0 0 12px rgba(100, 255, 100, 0.3)';
+  } else {
+    // Red border when no hand
+    cameraPreview.style.borderColor = 'rgba(255, 80, 80, 0.5)';
+    cameraPreview.style.boxShadow = '0 0 8px rgba(255, 80, 80, 0.2)';
+  }
+
+  previewCtx.restore();
+}
+
+// MediaPipe hand skeleton connections
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],       // thumb
+  [0,5],[5,6],[6,7],[7,8],       // index
+  [5,9],[9,10],[10,11],[11,12],  // middle
+  [9,13],[13,14],[14,15],[15,16],// ring
+  [13,17],[17,18],[18,19],[19,20],// pinky
+  [0,17]                           // palm base
+];
+
+function drawLandmarksOnPreview(landmarks, pw, ph) {
+  previewCtx.save();
+
+  // Mirror x-coordinates for preview if front camera
+  const getX = (lm) => isMirrored ? (1 - lm.x) * pw : lm.x * pw;
+  const getY = (lm) => lm.y * ph;
+
+  // Draw skeleton connections
+  previewCtx.strokeStyle = 'rgba(0, 255, 150, 0.7)';
+  previewCtx.lineWidth = 2;
+  previewCtx.lineCap = 'round';
+  previewCtx.lineJoin = 'round';
+
+  for (const [startIdx, endIdx] of HAND_CONNECTIONS) {
+    const start = landmarks[startIdx];
+    const end = landmarks[endIdx];
+    previewCtx.beginPath();
+    previewCtx.moveTo(getX(start), getY(start));
+    previewCtx.lineTo(getX(end), getY(end));
+    previewCtx.stroke();
+  }
+
+  // Draw landmark dots
+  for (let i = 0; i < landmarks.length; i++) {
+    const lm = landmarks[i];
+    const x = getX(lm);
+    const y = getY(lm);
+
+    // Highlight index tip (8) and thumb tip (4) specially
+    const isPinchLandmark = (i === 4 || i === 8);
+    const radius = isPinchLandmark ? 5 : 3;
+    const color = isPinchLandmark ? 'rgba(255, 200, 50, 0.95)' : 'rgba(0, 255, 150, 0.8)';
+
+    previewCtx.fillStyle = color;
+    previewCtx.beginPath();
+    previewCtx.arc(x, y, radius, 0, Math.PI * 2);
+    previewCtx.fill();
+
+    // White outline for pinch landmarks
+    if (isPinchLandmark) {
+      previewCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+      previewCtx.lineWidth = 1.5;
+      previewCtx.stroke();
+    }
+  }
+
+  // Draw pinch indicator line between thumb (4) and index (8)
+  const thumb = landmarks[4];
+  const index = landmarks[8];
+  previewCtx.strokeStyle = 'rgba(255, 200, 50, 0.6)';
+  previewCtx.lineWidth = 2;
+  previewCtx.setLineDash([4, 3]);
+  previewCtx.beginPath();
+  previewCtx.moveTo(getX(thumb), getY(thumb));
+  previewCtx.lineTo(getX(index), getY(index));
+  previewCtx.stroke();
+  previewCtx.setLineDash([]);
+
+  previewCtx.restore();
+}
+
 // --- Blackboard config ---
 const BLACKBOARD_COLOR = '#1a2921';
 
@@ -538,6 +664,9 @@ function isPinching(landmarks) {
 // Main callback from MediaPipe Hands
 // ------------------------------------------------------------------
 function onResults(results) {
+  // Draw camera preview first (with landmarks)
+  drawCameraPreview(results);
+
   // Paint blackboard background
   ctx.fillStyle = BLACKBOARD_COLOR;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
