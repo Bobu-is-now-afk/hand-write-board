@@ -43,11 +43,17 @@ function drawCameraPreview(results) {
   // Draw landmarks if hand detected
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
     const landmarks = results.multiHandLandmarks[0];
-    drawLandmarksOnPreview(landmarks, pw, ph);
+    const indexUp = isIndexUpGesture(landmarks);
+    drawLandmarksOnPreview(landmarks, pw, ph, indexUp);
 
-    // Visual status indicator — green border when hand detected
-    cameraPreview.style.borderColor = 'rgba(100, 255, 100, 0.6)';
-    cameraPreview.style.boxShadow = '0 0 12px rgba(100, 255, 100, 0.3)';
+    // Visual status indicator — green border when Index Up gesture detected
+    if (indexUp) {
+      cameraPreview.style.borderColor = 'rgba(100, 255, 100, 0.8)';
+      cameraPreview.style.boxShadow = '0 0 16px rgba(100, 255, 100, 0.4)';
+    } else {
+      cameraPreview.style.borderColor = 'rgba(255, 200, 50, 0.5)';
+      cameraPreview.style.boxShadow = '0 0 8px rgba(255, 200, 50, 0.2)';
+    }
   } else {
     // Red border when no hand
     cameraPreview.style.borderColor = 'rgba(255, 80, 80, 0.5)';
@@ -67,7 +73,7 @@ const HAND_CONNECTIONS = [
   [0,17]                           // palm base
 ];
 
-function drawLandmarksOnPreview(landmarks, pw, ph) {
+function drawLandmarksOnPreview(landmarks, pw, ph, indexUp) {
   previewCtx.save();
 
   // Mirror x-coordinates for preview if front camera
@@ -95,35 +101,31 @@ function drawLandmarksOnPreview(landmarks, pw, ph) {
     const x = getX(lm);
     const y = getY(lm);
 
-    // Highlight index tip (8) and thumb tip (4) specially
-    const isPinchLandmark = (i === 4 || i === 8);
-    const radius = isPinchLandmark ? 5 : 3;
-    const color = isPinchLandmark ? 'rgba(255, 200, 50, 0.95)' : 'rgba(0, 255, 150, 0.8)';
+    // Highlight index tip (8) specially — the writing tip
+    const isIndexTip = (i === 8);
+    const radius = isIndexTip ? 6 : 3;
+    const color = isIndexTip
+      ? (indexUp ? 'rgba(100, 255, 100, 0.95)' : 'rgba(255, 200, 50, 0.95)')
+      : 'rgba(0, 255, 150, 0.8)';
 
     previewCtx.fillStyle = color;
     previewCtx.beginPath();
     previewCtx.arc(x, y, radius, 0, Math.PI * 2);
     previewCtx.fill();
 
-    // White outline for pinch landmarks
-    if (isPinchLandmark) {
-      previewCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-      previewCtx.lineWidth = 1.5;
+    // White outline for index tip
+    if (isIndexTip) {
+      previewCtx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+      previewCtx.lineWidth = 2;
       previewCtx.stroke();
     }
   }
 
-  // Draw pinch indicator line between thumb (4) and index (8)
-  const thumb = landmarks[4];
-  const index = landmarks[8];
-  previewCtx.strokeStyle = 'rgba(255, 200, 50, 0.6)';
-  previewCtx.lineWidth = 2;
-  previewCtx.setLineDash([4, 3]);
-  previewCtx.beginPath();
-  previewCtx.moveTo(getX(thumb), getY(thumb));
-  previewCtx.lineTo(getX(index), getY(index));
-  previewCtx.stroke();
-  previewCtx.setLineDash([]);
+  // Draw gesture indicator text
+  previewCtx.fillStyle = indexUp ? 'rgba(100, 255, 100, 0.9)' : 'rgba(255, 200, 50, 0.7)';
+  previewCtx.font = 'bold 11px "SF Mono", monospace';
+  previewCtx.textAlign = 'center';
+  previewCtx.fillText(indexUp ? 'INDEX UP ✓' : 'INDEX UP ?', pw / 2, ph - 6);
 
   previewCtx.restore();
 }
@@ -144,17 +146,18 @@ let eraserMode = false;
 let penDown = false;
 let spaceHeld = false;
 
-// Pinch detection
-let PINCH_THRESHOLD = 0.055; // dynamic — recalculated per frame
-let wasPinching = false;
+// Gesture detection: "Index Up / Number 1" — index extended, others curled
+let wasDrawing = false;
 
 // Stroke storage
 let strokes = [];
 let currentStroke = null;
 
-// Smoothing
+// Smoothing — EMA (Exponential Moving Average) for anti-jitter
 let smoothX = null;
 let smoothY = null;
+const SMOOTH_ALPHA = 0.55; // 0.0 = max smoothing, 1.0 = raw
+
 let prevX = null;
 let prevY = null;
 
@@ -499,7 +502,7 @@ window.addEventListener('keyup', (e) => {
 
 window.addEventListener('blur', () => {
   spaceHeld = false;
-  wasPinching = false;
+  wasDrawing = false;
 });
 
 // ------------------------------------------------------------------
@@ -634,6 +637,45 @@ function drawCursor() {
 }
 
 // ------------------------------------------------------------------
+// "Index Up / Number 1" gesture detection
+// Index finger extended upward, middle/ring/pinky curled into fist
+// Thumb state is ignored for natural writing feel
+// ------------------------------------------------------------------
+function isIndexUpGesture(lm) {
+  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+
+  // Index extended: Tip (8) is further from Wrist (0) than PIP joint (6)
+  // AND tip is above PIP (y is smaller in normalized coords)
+  const indexExtended = dist(lm[8], lm[0]) > dist(lm[6], lm[0]) && lm[8].y < lm[6].y;
+
+  // Middle, Ring, and Pinky are curled: Tips are closer to wrist than their PIP joints
+  const middleCurled = dist(lm[12], lm[0]) < dist(lm[10], lm[0]);
+  const ringCurled   = dist(lm[16], lm[0]) < dist(lm[14], lm[0]);
+  const pinkyCurled  = dist(lm[20], lm[0]) < dist(lm[18], lm[0]);
+
+  return indexExtended && middleCurled && ringCurled && pinkyCurled;
+}
+
+// ------------------------------------------------------------------
+// EMA smoothing — apply low-pass filter to raw coordinates
+// ------------------------------------------------------------------
+function smoothPoint(targetX, targetY) {
+  if (smoothX === null) {
+    smoothX = targetX;
+    smoothY = targetY;
+  } else {
+    smoothX = SMOOTH_ALPHA * targetX + (1 - SMOOTH_ALPHA) * smoothX;
+    smoothY = SMOOTH_ALPHA * targetY + (1 - SMOOTH_ALPHA) * smoothY;
+  }
+  return { x: smoothX, y: smoothY };
+}
+
+function resetSmoothing() {
+  smoothX = null;
+  smoothY = null;
+}
+
+// ------------------------------------------------------------------
 // Pinch detection — dynamic threshold based on hand depth
 // Uses wrist (landmark 0) to middle knuckle (landmark 9) as reference scalar
 // ------------------------------------------------------------------
@@ -676,10 +718,9 @@ function onResults(results) {
 
   // No hand detected
   if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-    wasPinching = false;
+    wasDrawing = false;
     penDown = false;
-    smoothX = null;
-    smoothY = null;
+    resetSmoothing();
     prevX = null;
     prevY = null;
     updateHUD();
@@ -690,23 +731,17 @@ function onResults(results) {
   const tip = landmarks[8]; // index fingertip
 
   // Mirror coordinate inversion — only when using front camera
-  const x = isMirrored ? (1 - tip.x) * canvas.width : tip.x * canvas.width;
-  const y = tip.y * canvas.height;
+  const rawX = isMirrored ? (1 - tip.x) * canvas.width : tip.x * canvas.width;
+  const rawY = tip.y * canvas.height;
 
-  // Smooth the cursor position
-  if (smoothX === null) {
-    smoothX = x;
-    smoothY = y;
-  } else {
-    smoothX += (x - smoothX) * 0.45;
-    smoothY += (y - smoothY) * 0.45;
-  }
+  // Apply EMA smoothing to kill micro-jitter
+  const smoothed = smoothPoint(rawX, rawY);
 
-  // Pinch detection (dynamic threshold)
-  const pinching = isPinching(landmarks);
+  // "Index Up / Number 1" gesture detection
+  const indexUp = isIndexUpGesture(landmarks);
 
-  // Pen is down if pinching OR space held
-  const shouldDraw = pinching || spaceHeld;
+  // Pen is down if Index Up gesture OR space held
+  const shouldDraw = indexUp || spaceHeld;
 
   // State machine
   if (shouldDraw && !penDown) {
@@ -723,9 +758,9 @@ function onResults(results) {
   }
 
   if (shouldDraw && currentStroke) {
-    currentStroke.points.push({ x: smoothX, y: smoothY });
-    prevX = smoothX;
-    prevY = smoothY;
+    currentStroke.points.push({ x: smoothed.x, y: smoothed.y });
+    prevX = smoothed.x;
+    prevY = smoothed.y;
   }
 
   if (!shouldDraw && penDown) {
@@ -733,6 +768,7 @@ function onResults(results) {
     currentStroke = null;
     prevX = null;
     prevY = null;
+    resetSmoothing();
   }
 
   drawCursor();
