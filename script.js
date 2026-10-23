@@ -17,8 +17,12 @@ function drawCameraPreview(results) {
     previewVisible = true;
   }
 
-  const pw = cameraPreview.clientWidth;
-  const ph = cameraPreview.clientHeight;
+  const pw = cameraPreview.clientWidth || 200;
+  const ph = cameraPreview.clientHeight || 150;
+
+  // Ensure canvas has valid dimensions
+  if (pw === 0 || ph === 0) return;
+
   // Match canvas to container
   if (previewCanvas.width !== pw || previewCanvas.height !== ph) {
     previewCanvas.width = pw;
@@ -27,8 +31,19 @@ function drawCameraPreview(results) {
 
   previewCtx.save();
 
-  // Clear
-  previewCtx.clearRect(0, 0, pw, ph);
+  // Clear with black background
+  previewCtx.fillStyle = '#000';
+  previewCtx.fillRect(0, 0, pw, ph);
+
+  // Guard: video must have dimensions
+  if (!video.videoWidth || !video.videoHeight) {
+    previewCtx.fillStyle = '#fcf9ea';
+    previewCtx.font = '12px monospace';
+    previewCtx.textAlign = 'center';
+    previewCtx.fillText('Camera loading...', pw / 2, ph / 2);
+    previewCtx.restore();
+    return;
+  }
 
   // Calculate aspect-ratio-preserving draw dimensions
   const videoAspect = video.videoWidth / video.videoHeight;
@@ -63,7 +78,7 @@ function drawCameraPreview(results) {
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
     const landmarks = results.multiHandLandmarks[0];
     const indexUp = isIndexUpGesture(landmarks);
-    drawLandmarksOnPreview(landmarks, pw, ph, indexUp);
+    drawLandmarksOnPreview(landmarks, pw, ph, drawX, drawY, drawW, drawH, indexUp);
 
     // Visual status indicator — green border when Index Up gesture detected
     if (indexUp) {
@@ -92,25 +107,8 @@ const HAND_CONNECTIONS = [
   [0,17]                           // palm base
 ];
 
-function drawLandmarksOnPreview(landmarks, pw, ph, indexUp) {
+function drawLandmarksOnPreview(landmarks, pw, ph, drawX, drawY, drawW, drawH, indexUp) {
   previewCtx.save();
-
-  // Calculate same aspect-ratio-preserving dimensions as video draw
-  const videoAspect = video.videoWidth / video.videoHeight;
-  const containerAspect = pw / ph;
-  let drawW, drawH, drawX, drawY;
-
-  if (videoAspect > containerAspect) {
-    drawW = pw;
-    drawH = pw / videoAspect;
-    drawX = 0;
-    drawY = (ph - drawH) / 2;
-  } else {
-    drawH = ph;
-    drawW = ph * videoAspect;
-    drawY = 0;
-    drawX = (pw - drawW) / 2;
-  }
 
   // Map normalized landmarks to the letterboxed video area
   const getX = (lm) => {
@@ -419,7 +417,16 @@ async function startCamera() {
     cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = cameraStream;
 
-    // Wait for video to be ready
+    // Wait for video metadata (dimensions) to be available
+    await new Promise(resolve => {
+      if (video.readyState >= 1) resolve();
+      else video.addEventListener('loadedmetadata', resolve, { once: true });
+    });
+
+    // On mobile Safari, video may need a play() call
+    try { await video.play(); } catch (e) {}
+
+    // Wait for first frame data
     await new Promise(resolve => {
       if (video.readyState >= 2) resolve();
       else video.addEventListener('loadeddata', resolve, { once: true });
@@ -436,10 +443,18 @@ async function startCamera() {
     try {
       cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       video.srcObject = cameraStream;
+
+      await new Promise(resolve => {
+        if (video.readyState >= 1) resolve();
+        else video.addEventListener('loadedmetadata', resolve, { once: true });
+      });
+      try { await video.play(); } catch (e) {}
+
       await new Promise(resolve => {
         if (video.readyState >= 2) resolve();
         else video.addEventListener('loadeddata', resolve, { once: true });
       });
+
       cameraStarted = true;
       startProcessingLoop();
     } catch (err2) {
